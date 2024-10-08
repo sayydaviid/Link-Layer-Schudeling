@@ -243,7 +243,7 @@ class LinkLayer:
 
         elif purification_type == 'pumping':
             # Realiza a purificação por bombardeamento
-            return self.purification_pumping(alice_id, bob_id, f1, f2)
+            return self.purification_pumping(alice_id, bob_id, f1, f2, rounds)
 
         else:
             self.logger.log("Tipo de purificação inválido. Escolha 'symmetric' ou 'pumping'.")
@@ -346,83 +346,68 @@ class LinkLayer:
         return True
 
 
-    def purification_pumping(self, alice_id: int, bob_id: int, f1: float, f2: float):
+    def purification_pumping(self, alice_id: int, bob_id: int, f1: float, f2: float, rounds: int, min_eprs: int = 2):
         """
-        Purificação por Bombardeamento (Pumping).
+        Purificação por Bombardeamento (Pumping) com múltiplos rounds e verificação de EPRs mínimos.
 
         Args:
             alice_id (int): ID do host Alice.
             bob_id (int): ID do host Bob.
             f1 (float): Fidelidade do primeiro EPR.
             f2 (float): Fidelidade do segundo EPR.
+            rounds (int): Número de rounds de purificação a serem realizados.
+            min_eprs (int): Número mínimo de EPRs necessários para executar o round.
 
         Returns:
-            bool: True se a purificação foi bem-sucedida, False caso contrário.
+            bool: True se a purificação foi bem-sucedida após todos os rounds, False caso contrário.
         """
-        self.logger.log(f"Iniciando purificação por bombardeamento entre {alice_id} e {bob_id}.")
+        self.logger.log(f"Iniciando purificação por bombardeamento entre {alice_id} e {bob_id} para {rounds} rounds.")
 
-        # Verifica o tipo de canal
-        channel_info = self._network.get_channel_info(alice_id, bob_id)
-        canal_tipo = channel_info.get('type', 'desconhecido')
+        for round_num in range(1, rounds + 1):
+            self.logger.log(f"Verificando EPRs para o round {round_num}...")
 
-        if canal_tipo in ['X', 'XZ', 'Z']:
-            # Erro X, XZ ou Z
-            p_success = f1 * f2 + (1 - f1) * (1 - f2)
-            new_fidelity = f1 * f2 / p_success
-        elif canal_tipo == 'XZ':
-            # Estado de Werner
-            p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
-                        (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
-            new_fidelity = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
-        else:
-            # Caso não identificado
-            self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
-            return False
+            # Obter os EPRs disponíveis entre Alice e Bob
+            eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
+            
+            # Verifica se há EPRs mínimos para o round
+            if len(eprs) < min_eprs:
+                self.logger.log(f"Round {round_num}: Não há EPRs suficientes (mínimo {min_eprs} exigido). Agendando criação de novos EPRs.")
+                # Agenda a criação de novos EPRs para o próximo round
+                for _ in range(min_eprs - len(eprs)):
+                    self._physical_layer.create_epr_pair(fidelity=random.uniform(0.5, 0.8))  # Criação de novos EPRs
+                continue  # Vai para o próximo round após agendar a criação dos EPRs
 
-        # Criar novo EPR após purificação
-        epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
-        eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
-        eprs.append(epr_purified)
+            # Selecionar os dois últimos EPRs disponíveis
+            epr1 = eprs[-2]
+            epr2 = eprs[-1]
+            f1 = epr1.get_current_fidelity()
+            f2 = epr2.get_current_fidelity()
 
-        self.logger.log(f"Fidelidade após purificação por bombardeamento: {new_fidelity}")
+            # Verifica o tipo de canal
+            channel_info = self._network.get_channel_info(alice_id, bob_id)
+            canal_tipo = channel_info.get('type', 'desconhecido')
+
+            if canal_tipo in ['X', 'XZ', 'Z', 'Y']:
+                # Erro X, XZ, Z ou Y
+                p_success = f1 * f2 + (1 - f1) * (1 - f2)
+                new_fidelity = f1 * f2 / p_success
+            elif canal_tipo == 'XZ':
+                # Estado de Werner
+                p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
+                            (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
+                new_fidelity = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
+            else:
+                # Caso não identificado
+                self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
+                return False
+
+            # Criar novo EPR após purificação
+            epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
+            eprs.append(epr_purified)
+
+            self.logger.log(f"Round {round_num}: Fidelidade após purificação por bombardeamento: {new_fidelity}")
+
+        self.logger.log(f"Purificação por bombardeamento completada com sucesso após {rounds} rounds.")
         return True
 
 
-    def purification_pumping(self, alice_id: int, bob_id: int, f1: float, f2: float):
-        """
-        Purificação por Bombardeamento (Pumping).
-
-        Args:
-            alice_id (int): ID do host Alice.
-            bob_id (int): ID do host Bob.
-            f1 (float): Fidelidade do primeiro EPR.
-            f2 (float): Fidelidade do segundo EPR.
-
-        Returns:
-            bool: True se a purificação foi bem-sucedida, False caso contrário.
-        """
-        self.logger.log(f"Iniciando purificação por bombardeamento entre {alice_id} e {bob_id}.")
-
-        # Verifica o tipo de canal
-        channel_info = self._network.get_channel_info(alice_id, bob_id)
-        if channel_info['type'] in ['X', 'XZ']:
-            # Erro X ou XZ
-            p_success = f1 * f2 + (1 - f1) * (1 - f2)
-            new_fidelity = f1 * f2 / p_success
-        elif channel_info['type'] == 'XZ':
-            # Estado de Werner
-            p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
-                        (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
-            new_fidelity = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
-        else:
-            # Caso não identificado
-            self.logger.log(f"Tipo de canal não identificado para a purificação.")
-            return False
-
-        # Criar novo EPR após purificação
-        epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
-        eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
-        eprs.append(epr_purified)
-
-        self.logger.log(f"Fidelidade após purificação por bombardeamento: {new_fidelity}")
-        return True

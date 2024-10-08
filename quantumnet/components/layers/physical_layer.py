@@ -97,7 +97,7 @@ class PhysicalLayer:
         self._count_qubit += 1
         self.logger.debug(f'Qubit {qubit_id} criado com fidelidade inicial {qubit.get_initial_fidelity()} e adicionado à memória do Host {host_id}.')
 
-    def create_epr_pair(self, fidelity: float = 0.9, increment_timeslot: bool = True, increment_eprs: bool = True):
+    def create_epr_pair(self, fidelity: float = 0.7, increment_timeslot: bool = True, increment_eprs: bool = True):
         """Cria um par de qubits entrelaçados.
 
         Returns:
