@@ -97,7 +97,7 @@ class PhysicalLayer:
         self._count_qubit += 1
         self.logger.debug(f'Qubit {qubit_id} criado com fidelidade inicial {qubit.get_initial_fidelity()} e adicionado à memória do Host {host_id}.')
 
-    def create_epr_pair(self, fidelity: float = 0.7, increment_timeslot: bool = True, increment_eprs: bool = True):
+    def create_epr_pair(self, fidelity: float = 0.9, increment_timeslot: bool = True, increment_eprs: bool = True):
         """Cria um par de qubits entrelaçados.
 
         Returns:
@@ -127,22 +127,34 @@ class PhysicalLayer:
         self._network.graph.edges[u, v]['eprs'].append(epr)
         self.logger.debug(f'Par EPR {epr} adicionado ao canal {channel}.')
 
-    def remove_epr_from_channel(self, epr: Epr, channel: tuple):
-        """Remove um par EPR do canal.
+    def remove_epr_from_channel(self, epr_list: list, channel: tuple):
+        """Remove uma lista de pares EPR do canal.
 
         Args:
-            epr (Epr): Par EPR a ser removido.
-            channel (tuple): Canal.
+            epr_list (list): Lista de pares EPR a serem removidos.
+            channel (tuple): Canal de onde os EPRs serão removidos.
         """
         u, v = channel
         if not self._network.graph.has_edge(u, v):
             self.logger.debug(f'Canal {channel} não existe.')
             return
-        try:
-            self._network.graph.edges[u, v]['eprs'].remove(epr)
-            self.logger.debug(f'Par EPR {epr} removido do canal {channel}.')
-        except ValueError:
-            self.logger.debug(f'Par EPR {epr} não encontrado no canal {channel}.')
+
+        eprs_in_channel = self._network.graph.edges[u, v]['eprs']
+        
+        # Cria uma nova lista sem os EPRs que estão na epr_list
+        updated_eprs = [epr_in_channel for epr_in_channel in eprs_in_channel 
+                        if all(epr_in_channel.epr_id != epr.epr_id for epr in epr_list)]
+        
+        # Atualiza a lista de EPRs no canal com a nova lista
+        self._network.graph.edges[u, v]['eprs'] = updated_eprs
+
+        # Log para cada EPR removido
+        for epr in epr_list:
+            self.logger.debug(f'Par EPR {epr.epr_id} removido do canal {channel}.')
+
+
+
+
 
     def fidelity_measurement_only_one(self, qubit: Qubit):
         """Mede a fidelidade de um qubit.

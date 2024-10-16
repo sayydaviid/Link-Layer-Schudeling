@@ -239,7 +239,7 @@ class LinkLayer:
 
         if purification_type == 'symmetric':
             # Realiza a purificação simétrica para múltiplos rounds
-            return self.purification_symmetric(alice_id, bob_id, f1, f2, rounds)
+            return self.purification_symmetric(alice_id, bob_id, rounds)
 
         elif purification_type == 'pumping':
             # Realiza a purificação por bombardeamento
@@ -250,164 +250,347 @@ class LinkLayer:
             return False
 
 
-
-    def purification_symmetric(self, alice_id: int, bob_id: int, f1: float, f2: float, rounds: int):
+    def scheduling_verify(self, alice_id: int, bob_id: int, rounds: int) -> bool:
         """
-        Purificação Simétrica de EPRs para múltiplos rounds.
+        Verifica se há a quantidade de EPRs necessários para a purificação e cria mais se necessário.
 
         Args:
             alice_id (int): ID do host Alice.
             bob_id (int): ID do host Bob.
-            f1 (float): Fidelidade do primeiro EPR.
-            f2 (float): Fidelidade do segundo EPR.
+            rounds (int): Número de rounds de purificação.
+
+        Returns:
+            bool: True se houver EPRs suficientes após a verificação, False caso contrário.
+        """
+        # Calcula o número necessário de EPRs baseado no número de rounds
+        required_eprs = 2 ** rounds
+        eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
+        available_eprs = len(eprs)
+        
+        # Verifica se a quantidade disponível é suficiente
+        if available_eprs < required_eprs:
+            missing_eprs = required_eprs - available_eprs
+            self.logger.log(f"Não há EPRs suficientes para purificação. Necessário: {required_eprs}, Disponível: {available_eprs}. Criando {missing_eprs} EPRs adicionais.")
+            
+            # Cria os EPRs necessários e evita duplicação
+            for _ in range(missing_eprs):
+                new_epr = self._physical_layer.create_epr_pair(alice_id, bob_id)
+                self._physical_layer.add_epr_to_channel(new_epr, (alice_id, bob_id))
+
+            self.logger.log(f"Total de {missing_eprs} EPRs criados e adicionados ao canal entre {alice_id} e {bob_id}.")
+            
+            # Atualiza a lista de EPRs com os novos EPRs criados
+            eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
+            self.used_eprs = len(eprs)  # Atualiza o contador de EPRs utilizados
+            
+        # Verificação final se os EPRs são suficientes
+        if len(eprs) >= required_eprs:
+            self.logger.log(f"Agora há EPRs suficientes para a purificação: {len(eprs)} disponíveis.")
+            return True
+        else:
+            self.logger.log(f"Ainda não há EPRs suficientes após a criação. Disponíveis: {len(eprs)}, Necessários: {required_eprs}.")
+            return False
+        
+    def purification_symmetric(self, alice_id: int, bob_id: int, rounds: int) -> bool:
+        """
+        Purificação Simétrica de EPRs.
+
+        Args:
+            alice_id (int): ID do host Alice.
+            bob_id (int): ID do host Bob.
             rounds (int): Número de rounds de purificação.
 
         Returns:
             bool: True se a purificação foi bem-sucedida, False caso contrário.
         """
+
         self.logger.log(f"Iniciando purificação simétrica entre {alice_id} e {bob_id} para {rounds} rounds.")
+        
+        # Verifica e garante que há EPRs suficientes
+        if not self.scheduling_verify(alice_id, bob_id, rounds):
+            self.logger.log(f"Falha na verificação dos EPRs. Purificação abortada.")
+            return False
 
-        eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
-
+        # Executa a purificação por rounds
         for round_num in range(rounds):
-            # Verificar se há EPRs suficientes para continuar
-            if len(eprs) < 2:
-                self.logger.log(f"Não há EPRs suficientes para continuar a purificação simétrica no round {round_num + 1}.")
+            self.logger.log(f"Executando round {round_num + 1} de purificação simétrica.")
+            
+            # Pega todos os EPRs atuais entre Alice e Bob
+            eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
+            
+            # Determina o número necessário de EPRs para o round atual
+            num_eprs_necessarios = 2 ** (rounds - round_num)  # Exemplo: 4 EPRs no primeiro round, 2 no segundo
+
+            if len(eprs) < num_eprs_necessarios:
+                self.logger.log(f"Não há EPRs suficientes para purificação no round {round_num + 1}. Abortando.")
                 return False
+            
+            new_eprs = []  # Lista para armazenar os novos EPRs após purificação
+            
+            # Aplica purificação em pares de EPRs
+            for i in range(0, num_eprs_necessarios, 2):  # Itera de 2 em 2
+                epr1 = eprs[i]
+                epr2 = eprs[i + 1]
+                
+                f1 = epr1.get_current_fidelity()
+                f2 = epr2.get_current_fidelity()
+                self.logger.log(f"Purificando par de EPRs: fidelidades {f1} e {f2}.")
+                
+                # Pega as informações do canal
+                channel_info = self._network.get_channel_info(alice_id, bob_id)
+                canal_tipo = channel_info.get('type', 'desconhecido')
 
-            # Selecionar os dois últimos EPRs disponíveis
-            epr1 = eprs[-2]
-            epr2 = eprs[-1]
-            f1 = epr1.get_current_fidelity()
-            f2 = epr2.get_current_fidelity()
-
-            # Verifica o tipo de canal
-            channel_info = self._network.get_channel_info(alice_id, bob_id)
-            canal_tipo = channel_info.get('type', 'desconhecido')
-
-            if canal_tipo in ['X', 'XZ']:
-                # Erro X ou XZ
-                p_success = f1 * f2 + (1 - f1) * (1 - f2)
-                x = random.uniform(0, 1)
-                print("o valor de x é: ", x)
-                if p_success >= x:
-                    new_fidelity = f1 * f2 / (f1 * f2 + (1-f1) * (1-f2))
-                    self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Erro X ou XZ) - Fidelidade: {new_fidelity}")
-                else:
-                    self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
-                    return False
-
-            elif canal_tipo == 'XZ':
+                # Determina a probabilidade de sucesso e a nova fidelidade com base no tipo de canal
+                if canal_tipo in ['X', 'Z','Y' ]:
+                    p_success = f1 * f2 + (1 - f1) * (1 - f2)
+                    x = random.uniform(0, 1)
+                    self.logger.log(f"o valor de x é: {x}")
+                    if p_success >= x:
+                        new_fidelity = f1 * f2 / (f1 * f2 + (1-f1) * (1-f2))
+                        self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Erro X ou XZ) - Fidelidade: {new_fidelity}")
+                    else:
+                        self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
+                        return False
+                elif canal_tipo == 'XZ':
                 # Estado de Werner
-                p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
-                            (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
-                x = random.uniform(0, 1)
-                print("o valor de x é: ", x)
-                if p_success >= x:
-                    new_fidelity = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
-                    self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Estado de Werner) - Fidelidade: {new_fidelity}")
+                    p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
+                                (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
+                    x = random.uniform(0, 1)
+                    self.logger.log(f"o valor de x é: {x}")
+                    if p_success >= x:
+                        new_fidelity = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
+                        self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Estado de Werner) - Fidelidade: {new_fidelity}")
+                    else:
+                        self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
+                        return False
+                    
+                    
                 else:
-                    self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
+                    self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
                     return False
 
-            elif canal_tipo == 'Y':
-                # Erro Y
-                p_success = f1 * f2 + (1 - f1) * (1 - f2)
-                x = random.uniform(0, 1)
-                print("o valor de x é: ", x)
-                if p_success >= x:
-                    new_fidelity = f1 * f2 / (f1 * f2 + (1-f1) * (1-f2))
-                    self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Erro Y) - Fidelidade: {new_fidelity}")
-                else:
-                    self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
-                    return False
 
-            elif canal_tipo == 'Z':
-                # Erro Z (similar ao caso X ou XZ, com a mesma fórmula)
-                p_success = f1 * f2 + (1 - f1) * (1 - f2)
-                x = random.uniform(0, 1)
-                print("o valor de x é: ", x)
-                if p_success >= x:
-                    new_fidelity = f1 * f2 / (f1 * f2 + (1-f1) * (1-f2))
-                    self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Erro Z) - Fidelidade: {new_fidelity}")
-                else:
-                    self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
-                    return False
+                    
+                # Criação de um novo par EPR com fidelidade pós-purificação
+                epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
+                new_eprs.append(epr_purified)
 
-            else:
-                # Caso não identificado
-                self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
-                return False
+            # Remove os EPRs antigos usados no round atual do canal
+            try:
+                self._physical_layer.remove_epr_from_channel(eprs[:num_eprs_necessarios], (alice_id, bob_id))
+            except ValueError as e:
+                self.logger.log(f"Erro ao remover EPRs do canal: {e}. Tentando continuar.")
 
-            # Criação de um novo par EPR com fidelidade pós-purificação
-            epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
-            eprs.append(epr_purified)
+            # Adiciona os novos EPRs purificados ao canal
+            for epr_purified in new_eprs:
+                self._physical_layer.add_epr_to_channel(epr_purified, (alice_id, bob_id))
 
+            self.logger.log(f"Round {round_num + 1} de purificação concluído com sucesso.")
+
+        # Certifica-se de que o número de EPRs após o último round é 1
+        self.logger.log(f"Purificação simétrica entre {alice_id} e {bob_id} concluída com sucesso.")
         return True
 
 
-    def purification_pumping(self, alice_id: int, bob_id: int, f1: float, f2: float, rounds: int, min_eprs: int = 2):
+    def purification_pumping(self, alice_id: int, bob_id: int, rounds: int) -> bool:
         """
-        Purificação por Bombardeamento (Pumping) com múltiplos rounds e verificação de EPRs mínimos.
+        Purificação por Bombardeamento (Pumping) de EPRs com agendamento de criação de EPRs conforme necessário.
 
         Args:
             alice_id (int): ID do host Alice.
             bob_id (int): ID do host Bob.
-            f1 (float): Fidelidade do primeiro EPR.
-            f2 (float): Fidelidade do segundo EPR.
-            rounds (int): Número de rounds de purificação a serem realizados.
-            min_eprs (int): Número mínimo de EPRs necessários para executar o round.
+            rounds (int): Número de rounds de purificação.
 
         Returns:
-            bool: True se a purificação foi bem-sucedida após todos os rounds, False caso contrário.
+            bool: True se a purificação foi bem-sucedida, False caso contrário.
         """
+
         self.logger.log(f"Iniciando purificação por bombardeamento entre {alice_id} e {bob_id} para {rounds} rounds.")
 
-        for round_num in range(1, rounds + 1):
-            self.logger.log(f"Verificando EPRs para o round {round_num}...")
+        # Verifica e agenda criação de EPRs necessários antes de iniciar a purificação
+        if not self.scheduling_verify(alice_id, bob_id, rounds):
+            self.logger.log(f"Falha na verificação dos EPRs. Purificação abortada.")
+            return False
 
-            # Obter os EPRs disponíveis entre Alice e Bob
-            eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
-            
-            # Verifica se há EPRs mínimos para o round
-            if len(eprs) < min_eprs:
-                self.logger.log(f"Round {round_num}: Não há EPRs suficientes (mínimo {min_eprs} exigido). Agendando criação de novos EPRs.")
-                # Agenda a criação de novos EPRs para o próximo round
-                for _ in range(min_eprs - len(eprs)):
-                    self._physical_layer.create_epr_pair(fidelity=random.uniform(0.5, 0.8))  # Criação de novos EPRs
-                continue  # Vai para o próximo round após agendar a criação dos EPRs
+        # Pega todos os EPRs atuais entre Alice e Bob
+        eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
 
-            # Selecionar os dois últimos EPRs disponíveis
-            epr1 = eprs[-2]
-            epr2 = eprs[-1]
-            f1 = epr1.get_current_fidelity()
-            f2 = epr2.get_current_fidelity()
+        # Primeiro round: purificação de dois EPRs de base (f_base)
+        epr1 = eprs[-2]  # Penúltimo EPR
+        epr2 = eprs[-1]  # Último EPR
 
-            # Verifica o tipo de canal
-            channel_info = self._network.get_channel_info(alice_id, bob_id)
-            canal_tipo = channel_info.get('type', 'desconhecido')
+        f1 = epr1.get_current_fidelity()
+        f2 = epr2.get_current_fidelity()
 
+        self.logger.log(f"Purificando os primeiros EPRs: fidelidades {f1} e {f2}.")
+
+        # Verifica o tipo de canal
+        channel_info = self._network.get_channel_info(alice_id, bob_id)
+        canal_tipo = channel_info.get('type', 'desconhecido')
+
+        # Purificação do primeiro par (f_base -> f')
+        if canal_tipo in ['X', 'Z', 'Y']:
+            p_success = f1 * f2 + (1 - f1) * (1 - f2)
+            x = random.uniform(0, 1)
+            self.logger.log(f"o valor de x é: {x}")
+            if p_success >= x:
+                f_prime = f1 * f2 / (f1 * f2 + (1 - f1) * (1 - f2))
+                self.logger.log(f"Round 1 - Probabilidade de sucesso: {p_success} - Fidelidade f': {f_prime}")
+            else:
+                self.logger.log(f"Round 1 - Purificação falhou com probabilidade de sucesso: {p_success}.")
+                return False
+        elif canal_tipo == 'XZ':
+            # Estado de Werner
+            p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
+                        (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
+            x = random.uniform(0, 1)
+            self.logger.log(f"o valor de x é: {x}")
+            if p_success >= x:
+                f_prime = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
+                self.logger.log(f"Round 1 - Probabilidade de sucesso: {p_success} - Fidelidade f': {f_prime}")
+            else:
+                self.logger.log(f"Round 1 - Purificação falhou com probabilidade de sucesso: {p_success}.")
+                return False
+        else:
+            self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
+            return False
+
+        # Remove os EPRs usados (f_base)
+        try:
+            # Remover os EPRs da lista de EPRs
+            self._physical_layer.remove_epr_from_channel([epr1, epr2], (alice_id, bob_id))
+            self.logger.log(f"Par EPR {epr1.epr_id} e {epr2.epr_id} removidos do canal.")
+        except ValueError as e:
+            self.logger.log(f"Erro ao remover EPRs do canal: {e}. Tentando continuar.")
+
+        # Cria o novo EPR purificado (f')
+        epr_purified = self._physical_layer.create_epr_pair(fidelity=f_prime)
+
+        # Adiciona o novo EPR purificado ao canal
+        self._physical_layer.add_epr_to_channel(epr_purified, (alice_id, bob_id))
+
+        # Continua o processo para os rounds subsequentes
+        for round_num in range(2, rounds + 1):
+            self.logger.log(f"Executando round {round_num} de purificação por bombardeamento.")
+
+            # Verifica novamente se há EPRs suficientes para o round atual e agenda mais se necessário
+            if not self.scheduling_verify(alice_id, bob_id, rounds - round_num + 1):
+                self.logger.log(f"Falha na verificação dos EPRs no round {round_num}. Purificação abortada.")
+                return False
+
+            # Pega o EPR recém-purificado (f_prime)
+            epr_base = epr_purified
+
+            # Pega o próximo EPR de base (f_base) para purificação
+            eprs = self._network.get_eprs_from_edge(alice_id, bob_id)  # Atualiza a lista de EPRs após possível criação
+            epr_next = eprs[-1]  # Próximo EPR disponível de base
+            f_base = epr_next.get_current_fidelity()
+
+            self.logger.log(f"Purificando EPR: fidelidade {f_prime} com {f_base}.")
+
+            # Purificação do novo par (f_prime -> f'')
             if canal_tipo in ['X', 'XZ', 'Z', 'Y']:
-                # Erro X, XZ, Z ou Y
-                p_success = f1 * f2 + (1 - f1) * (1 - f2)
-                new_fidelity = f1 * f2 / p_success
+                p_success = f_prime * f_base + (1 - f_prime) * (1 - f_base)
+                x = random.uniform(0, 1)
+                self.logger.log(f"o valor de x é: {x}")
+                if p_success >= x:
+                    f_double_prime = f_prime * f_base / (f_prime * f_base + (1 - f_prime) * (1 - f_base))
+                    self.logger.log(f"Round {round_num} - Probabilidade de sucesso: {p_success} - Fidelidade f'': {f_double_prime}")
+                else:
+                    self.logger.log(f"Round {round_num} - Purificação falhou com probabilidade de sucesso: {p_success}.")
+                    return False
             elif canal_tipo == 'XZ':
                 # Estado de Werner
-                p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
-                            (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
-                new_fidelity = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
+                p_success = ((f_prime + (1 - f_prime) / 3) * (f_base + (1 - f_base) / 3) +
+                            (2 * (1 - f_prime) / 3) * (2 * (1 - f_base) / 3))
+                x = random.uniform(0, 1)
+                self.logger.log(f"o valor de x é: {x}")
+                if p_success >= x:
+                    f_double_prime = (f_prime * f_base + ((1 - f_prime) * (1 - f_base)) / 3**2) / p_success
+                    self.logger.log(f"Round {round_num} - Probabilidade de sucesso: {p_success} - Fidelidade f'': {f_double_prime}")
+                else:
+                    self.logger.log(f"Round {round_num} - Purificação falhou com probabilidade de sucesso: {p_success}.")
+                    return False
             else:
-                # Caso não identificado
                 self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
                 return False
 
-            # Criar novo EPR após purificação
-            epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
-            eprs.append(epr_purified)
+            # Remove os EPRs usados no round atual
+            try:
+                # Remover os EPRs da lista de EPRs
+                self._physical_layer.remove_epr_from_channel([epr_next], (alice_id, bob_id))
+                self.logger.log(f"Par EPR {epr_next.epr_id} removido do canal.")
+            except ValueError as e:
+                self.logger.log(f"Erro ao remover EPRs do canal: {e}. Tentando continuar.")
 
-            self.logger.log(f"Round {round_num}: Fidelidade após purificação por bombardeamento: {new_fidelity}")
+            # Cria o novo EPR purificado (f'')
+            epr_purified = self._physical_layer.create_epr_pair(fidelity=f_double_prime)
 
-        self.logger.log(f"Purificação por bombardeamento completada com sucesso após {rounds} rounds.")
+            # Adiciona o novo EPR purificado ao canal
+            self._physical_layer.add_epr_to_channel(epr_purified, (alice_id, bob_id))
+
+            # Atualiza f_prime para o próximo round
+            f_prime = f_double_prime
+
+        # Após todos os rounds, realiza mais uma purificação para pegar f'' e criar f'''
+        eprs = self._network.get_eprs_from_edge(alice_id, bob_id)  # Atualiza os EPRs após remoção
+        if len(eprs) >= 1:
+            epr_last_base = eprs[-1]  # Último EPR de base
+            f_last_base = epr_last_base.get_current_fidelity()
+
+            self.logger.log(f"Última purificação com EPR: fidelidade {f_prime} com {f_last_base}.")
+
+            # Purificação final
+            if canal_tipo in ['X', 'XZ', 'Z', 'Y']:
+                p_success = f_prime * f_last_base + (1 - f_prime) * (1 - f_last_base)
+                x = random.uniform(0, 1)
+                self.logger.log(f"o valor de x é: {x}")
+                if p_success >= x:
+                    f_triple_prime = f_prime * f_last_base / (f_prime * f_last_base + (1 - f_prime) * (1 - f_last_base))
+                    self.logger.log(f"Última purificação concluída com fidelidade f''': {f_triple_prime}.")
+                else:
+                    self.logger.log(f"Última purificação falhou com probabilidade de sucesso: {p_success}.")
+                    return False
+            elif canal_tipo == 'XZ':
+                # Estado de Werner
+                p_success = ((f_prime + (1 - f_prime) / 3) * (f_last_base + (1 - f_last_base) / 3) +
+                            (2 * (1 - f_prime) / 3) * (2 * (1 - f_last_base) / 3))
+                x = random.uniform(0, 1)
+                self.logger.log(f"o valor de x é: {x}")
+                if p_success >= x:
+                    f_triple_prime = (f_prime * f_last_base + ((1 - f_prime) * (1 - f_last_base)) / 3**2) / p_success
+                    self.logger.log(f"Última purificação concluída com fidelidade f''': {f_triple_prime}.")
+                else:
+                    self.logger.log(f"Última purificação falhou com probabilidade de sucesso: {p_success}.")
+                    return False
+            else:
+                self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
+                return False
+
+            # Remove o último EPR base usado
+            try:
+                # Remover o EPR da lista de EPRs
+                self._physical_layer.remove_epr_from_channel([epr_last_base], (alice_id, bob_id))
+                self.logger.log(f"Par EPR {epr_last_base.epr_id} removido do canal.")
+            except ValueError as e:
+                self.logger.log(f"Erro ao remover EPR do canal: {e}. Tentando continuar.")
+
+            # Cria o EPR final purificado (f''')
+            epr_purified = self._physical_layer.create_epr_pair(fidelity=f_triple_prime)
+
+            # Adiciona o EPR purificado final ao canal
+            self._physical_layer.add_epr_to_channel(epr_purified, (alice_id, bob_id))
+
+        self.logger.log(f"Purificação por bombardeamento entre {alice_id} e {bob_id} concluída com sucesso.")
         return True
+
+
+
+
+
+
+
+
+
 
 
