@@ -3,6 +3,8 @@ from quantumnet.components import Host
 from quantumnet.objects import Logger, Epr
 from random import uniform
 import random
+import difflib
+
 
 class LinkLayer:
     def __init__(self, network, physical_layer):
@@ -208,46 +210,46 @@ class LinkLayer:
         self.logger.log(f'A fidelidade média dos EPRs criados na camada de enlace é {avg_fidelity}')
         return avg_fidelity
 
-
-    
     def purification_scheduling(self, alice_id: int, bob_id: int, purification_type: str, rounds: int = 1):
         """
-        Função de agendamento de purificação, que executa tanto a purificação symétrica quanto a pumping.
+        Função de agendamento de purificação, que executa tanto a purificação simétrica quanto a pumping.
 
         Args:
             alice_id (int): ID do host Alice.
             bob_id (int): ID do host Bob.
             purification_type (str): Tipo de purificação a ser realizada ('symmetric' ou 'pumping').
-            rounds (int): Número de rounds de purificação. Aplica-se apenas para purificação symétrica.
+            rounds (int): Número de rounds de purificação. Aplica-se apenas para purificação simétrica.
         
         Returns:
             bool: True se a purificação foi bem-sucedida, False caso contrário.
         """
+        valid_purification_types = ['symmetric', 'pumping']
+
+        # Corrige automaticamente erros de digitação e variações de capitalização
+        match = difflib.get_close_matches(purification_type.lower(), valid_purification_types, n=1, cutoff=0.6)
+
+        if not match:
+            self.logger.log("Tipo de purificação inválido. Escolha 'symmetric' ou 'pumping'.")
+            return False
+
+        purification_type_corrected = match[0]
+
         # Obtém os EPRs do canal entre Alice e Bob
         eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
-
         if len(eprs) < 2:
             self.logger.log(f"Não há EPRs suficientes para realizar a purificação. São necessários pelo menos 2 EPRs.")
             return False
 
-        # Seleciona os dois últimos pares EPRs criados
-        epr1 = eprs[-2]
-        epr2 = eprs[-1]
-        # Obtém as fidelidades dos dois últimos EPRs
-        f1 = epr1.get_current_fidelity()
-        f2 = epr2.get_current_fidelity()
-
-        if purification_type == 'symmetric':
+        if purification_type_corrected == 'symmetric':
             # Realiza a purificação simétrica para múltiplos rounds
             return self.purification_symmetric(alice_id, bob_id, rounds)
 
-        elif purification_type == 'pumping':
+        elif purification_type_corrected == 'pumping':
             # Realiza a purificação por bombardeamento
-            return self.purification_pumping(alice_id, bob_id, f1, f2, rounds)
+            return self.purification_pumping(alice_id, bob_id, rounds)
 
-        else:
-            self.logger.log("Tipo de purificação inválido. Escolha 'symmetric' ou 'pumping'.")
-            return False
+        return False
+
 
 
     def scheduling_verify(self, alice_id: int, bob_id: int, rounds: int) -> bool:
@@ -274,7 +276,7 @@ class LinkLayer:
             
             # Cria os EPRs necessários e evita duplicação
             for _ in range(missing_eprs):
-                new_epr = self._physical_layer.create_epr_pair(alice_id, bob_id)
+                new_epr = self._physical_layer.create_epr_pair(alice_id, bob_id, increment_timeslot=False)
                 self._physical_layer.add_epr_to_channel(new_epr, (alice_id, bob_id))
 
             self.logger.log(f"Total de {missing_eprs} EPRs criados e adicionados ao canal entre {alice_id} e {bob_id}.")
@@ -303,6 +305,11 @@ class LinkLayer:
         Returns:
             bool: True se a purificação foi bem-sucedida, False caso contrário.
         """
+        # Verifica o nível de ruído do canal
+        channel_info = self._network.get_channel_info(alice_id, bob_id)
+        if any(channel_info.get(f'prob_erro_{tipo}', 0.0) > 0.2 for tipo in ['X', 'Y', 'Z', 'XZ']):
+            self.logger.log(f"Purificação abortada: Canal entre {alice_id} e {bob_id} é muito ruidoso.")
+            return False
 
         self.logger.log(f"Iniciando purificação simétrica entre {alice_id} e {bob_id} para {rounds} rounds.")
         
@@ -313,22 +320,24 @@ class LinkLayer:
 
         # Executa a purificação por rounds
         for round_num in range(rounds):
-            self.logger.log(f"Executando round {round_num + 1} de purificação simétrica.")
+            # Incrementa o timeslot
+            self._network.timeslot()
+            self.logger.log(f"Timeslot {self._network.get_timeslot()} - Executando round {round_num + 1} de purificação simétrica.")
             
             # Pega todos os EPRs atuais entre Alice e Bob
             eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
             
             # Determina o número necessário de EPRs para o round atual
-            num_eprs_necessarios = 2 ** (rounds - round_num)  # Exemplo: 4 EPRs no primeiro round, 2 no segundo
+            num_eprs_necessarios = 2 ** (rounds - round_num)
 
             if len(eprs) < num_eprs_necessarios:
                 self.logger.log(f"Não há EPRs suficientes para purificação no round {round_num + 1}. Abortando.")
                 return False
             
             new_eprs = []  # Lista para armazenar os novos EPRs após purificação
-            
+
             # Aplica purificação em pares de EPRs
-            for i in range(0, num_eprs_necessarios, 2):  # Itera de 2 em 2
+            for i in range(0, num_eprs_necessarios, 2):
                 epr1 = eprs[i]
                 epr2 = eprs[i + 1]
                 
@@ -336,43 +345,36 @@ class LinkLayer:
                 f2 = epr2.get_current_fidelity()
                 self.logger.log(f"Purificando par de EPRs: fidelidades {f1} e {f2}.")
                 
-                # Pega as informações do canal
-                channel_info = self._network.get_channel_info(alice_id, bob_id)
+                # Pega as informações do canal e tipo de erro
                 canal_tipo = channel_info.get('type', 'desconhecido')
 
                 # Determina a probabilidade de sucesso e a nova fidelidade com base no tipo de canal
-                if canal_tipo in ['X', 'Z','Y' ]:
+                if canal_tipo in ['X', 'Z','Y']:
                     p_success = f1 * f2 + (1 - f1) * (1 - f2)
                     x = random.uniform(0, 1)
-                    self.logger.log(f"o valor de x é: {x}")
                     if p_success >= x:
                         new_fidelity = f1 * f2 / (f1 * f2 + (1-f1) * (1-f2))
-                        self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Erro X ou XZ) - Fidelidade: {new_fidelity}")
+                        self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Erro X ou Y ou Z) - Fidelidade: {new_fidelity}")
                     else:
                         self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
                         return False
                 elif canal_tipo == 'XZ':
-                # Estado de Werner
+                    # Estado de Werner
                     p_success = ((f1 + (1 - f1) / 3) * (f2 + (1 - f2) / 3) +
                                 (2 * (1 - f1) / 3) * (2 * (1 - f2) / 3))
                     x = random.uniform(0, 1)
-                    self.logger.log(f"o valor de x é: {x}")
                     if p_success >= x:
                         new_fidelity = (f1 * f2 + ((1 - f1) * (1 - f2)) / 3**2) / p_success
                         self.logger.log(f"Round {round_num + 1} - Probabilidade de sucesso: {p_success} (Estado de Werner) - Fidelidade: {new_fidelity}")
                     else:
                         self.logger.log(f"Round {round_num + 1} - Purificação falhou devido à baixa probabilidade de sucesso: {p_success}.")
                         return False
-                    
-                    
                 else:
                     self.logger.log(f"Tipo de canal '{canal_tipo}' não identificado para a purificação.")
                     return False
 
-
-                    
                 # Criação de um novo par EPR com fidelidade pós-purificação
-                epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
+                epr_purified = self._physical_layer.create_epr_pair(fidelity=new_fidelity, increment_timeslot=False)
                 new_eprs.append(epr_purified)
 
             # Remove os EPRs antigos usados no round atual do canal
@@ -392,6 +394,7 @@ class LinkLayer:
         return True
 
 
+
     def purification_pumping(self, alice_id: int, bob_id: int, rounds: int) -> bool:
         """
         Purificação por Bombardeamento (Pumping) de EPRs com verificação de canal e criação conforme necessário.
@@ -405,16 +408,24 @@ class LinkLayer:
             bool: True se a purificação foi bem-sucedida, False caso contrário.
         """
         
+        # Verifica o nível de ruído do canal
+        channel_info = self._network.get_channel_info(alice_id, bob_id)
+        if any(channel_info.get(f'prob_erro_{tipo}', 0.0) > 0.2 for tipo in ['X', 'Y', 'Z', 'XZ']):
+            self.logger.log(f"Purificação abortada: Canal entre {alice_id} e {bob_id} é muito ruidoso.")
+            return False
+        
         self.logger.log(f"Iniciando purificação por bombardeamento entre {alice_id} e {bob_id} para {rounds} rounds.")
         
         eprs = self._network.get_eprs_from_edge(alice_id, bob_id)
         new_epr = None
         
         for round_num in range(rounds):
+            self._network.timeslot()  # Incrementa o timeslot para a tentativa de purificação
+            self.logger.log(f"Timeslot {self._network.get_timeslot()}: Executando round {round_num + 1} de purificação por bombardeamento.")
             if len(eprs) < 2:
                 # Se não houver EPRs suficientes, cria novos
                 missing_eprs = 2 - len(eprs)
-                self.logger.log(f"Faltam {missing_eprs} EPRs para o round {round_num + 1}. Criando mais EPRs...")
+                self.logger.log(f"Timeslot: {self._network.get_timeslot()} Faltam {missing_eprs} EPRs para o round {round_num + 1}. Criando mais EPRs...")
                 for _ in range(missing_eprs):
                     new_base_epr = self._physical_layer.create_epr_pair(alice_id, bob_id)
                     self._physical_layer.add_epr_to_channel(new_base_epr, (alice_id, bob_id))
@@ -475,7 +486,7 @@ class LinkLayer:
                 return False
 
             # Criação de um novo par EPR com fidelidade pós-purificação
-            new_epr = self._physical_layer.create_epr_pair(fidelity=new_fidelity)
+            new_epr = self._physical_layer.create_epr_pair(fidelity=new_fidelity, increment_timeslot=False)
 
             # Remover EPRs antigos usados no round atual do canal
             if round_num == 0:

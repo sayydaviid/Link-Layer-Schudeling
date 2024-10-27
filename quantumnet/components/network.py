@@ -331,6 +331,26 @@ class Network():
         }
         
         return channel_info
+    
+    def channels_informations(rede):
+        """
+        Exibe as informações de todos os canais da rede, incluindo tipo e probabilidades de erro.
+
+        Args:
+            rede: Objeto da rede contendo as arestas e canais entre os nós.
+        """
+        for edge in rede.edges:
+            alice, bob = edge
+            channel_info = rede.get_channel_info(alice, bob)
+            
+            # Exibe as informações do canal entre Alice e Bob
+            print(f"Canal entre {alice} e {bob}:")
+            print(f"  Tipo: {channel_info['type']}")
+            print(f"  Probabilidade de erro X: {channel_info['prob_erro_X']}")
+            print(f"  Probabilidade de erro Y: {channel_info['prob_erro_Y']}")
+            print(f"  Probabilidade de erro Z: {channel_info['prob_erro_Z']}")
+            print(f"  Probabilidade de erro XZ: {channel_info['prob_erro_XZ']}")
+            print("-" * 40)
 
     def timeslot(self):
         """
