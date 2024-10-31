@@ -276,7 +276,7 @@ class LinkLayer:
             
             # Cria os EPRs necessários e evita duplicação
             for _ in range(missing_eprs):
-                new_epr = self._physical_layer.create_epr_pair(alice_id, bob_id, increment_timeslot=False)
+                new_epr = self._physical_layer.create_epr_pair(increment_timeslot=False)
                 self._physical_layer.add_epr_to_channel(new_epr, (alice_id, bob_id))
 
             self.logger.log(f"Total de {missing_eprs} EPRs criados e adicionados ao canal entre {alice_id} e {bob_id}.")
@@ -427,7 +427,7 @@ class LinkLayer:
                 missing_eprs = 2 - len(eprs)
                 self.logger.log(f"Timeslot: {self._network.get_timeslot()} Faltam {missing_eprs} EPRs para o round {round_num + 1}. Criando mais EPRs...")
                 for _ in range(missing_eprs):
-                    new_base_epr = self._physical_layer.create_epr_pair(alice_id, bob_id)
+                    new_base_epr = self._physical_layer.create_epr_pair(increment_timeslot=False)
                     self._physical_layer.add_epr_to_channel(new_base_epr, (alice_id, bob_id))
                     eprs.append(new_base_epr)
 
